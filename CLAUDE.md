@@ -76,3 +76,6 @@ Wanneer een collega vraagt om documentatie te updaten, werk je Confluence-pagina
 - Wees consistent: gebruik dezelfde terminologie als de rest van de pagina of het project.
 - Pas geen code aan tenzij dit expliciet gevraagd wordt.
 - Als je twijfelt over de bedoeling van een wijziging, **vraag het eerst** — documenteer nooit op basis van aannames.
+
+## Hou rekening met de LICENSE
+- hou rekening met alle regels van de licentie.
