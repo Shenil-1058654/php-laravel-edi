@@ -1,0 +1,11 @@
+.idea
+vendor
+/vendor/
+composer.phar
+composer.lock
+/app/vendor/
+.env
+test.php
+!app/assets/vendor/
+/app/querry_viewer.php
+.csv

@@ -1,0 +1,106 @@
+stages:
+  - validate
+  - deploy
+
+
+validate:
+  stage: validate
+  image: php:8.2-apache
+  artifacts:
+    paths:
+      - app/
+      - vendor/
+  before_script:
+    - apt-get update
+    - apt-get install zip unzip
+    - php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+    - php composer-setup.php
+    - php -r "unlink('composer-setup.php');"
+  script:
+    - php composer.phar install --ignore-platform-req=ext-gd --ignore-platform-req=ext-zip --ignore-platform-req=ext-sqlsrv
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+
+deploy_main:
+  stage: deploy
+  needs:
+    - validate
+  dependencies:
+    - validate
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"
+      when: manual
+  before_script:
+    - |
+      if [ $CI_MERGE_REQUEST_APPROVED ]; then \
+        echo "Merge request was approved"; \
+      else \
+        echo "Merge request must be approved before you are able to run this step" && exit 1; \
+      fi
+    - 'which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )'
+    - mkdir -p ~/.ssh
+    - eval $(ssh-agent -s)
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+  script:
+    - rm -rf app/vendor
+    - ssh-add <(echo "$STAGING_PRIVATE_KEY" | base64 -d)
+    - ssh -p220 $DA_USER@$DA_SERVER "mkdir -p $BASE_DIR_PROD/_old"
+    - ssh -p220 $DA_USER@$DA_SERVER "cp -R $BASE_DIR_PROD/public_html $BASE_DIR_PROD/_old/public_html"
+    - ssh -p220 $DA_USER@$DA_SERVER "mkdir -p $BASE_DIR_PROD/_new"
+    - tar czf app.tar.gz -C app .
+    - scp -v -P220 app.tar.gz $DA_USER@$DA_SERVER:$BASE_DIR_PROD/
+    - ssh -p220 $DA_USER@$DA_SERVER "tar xzf $BASE_DIR_PROD/app.tar.gz -C $BASE_DIR_PROD/_new && rm $BASE_DIR_PROD/app.tar.gz"
+    - ssh -p220 $DA_USER@$DA_SERVER "composer install --working-dir $BASE_DIR_PROD/_new"
+    - ssh -p220 $DA_USER@$DA_SERVER "rm -rf $BASE_DIR_PROD/public_html"
+    - ssh -p220 $DA_USER@$DA_SERVER "mv $BASE_DIR_PROD/_new $BASE_DIR_PROD/public_html"
+    - ssh -p220 $DA_USER@$DA_SERVER "rm -rf $BASE_DIR_PROD/_old"
+    - ssh -p220 $DA_USER@$DA_SERVER "chmod 755 -R $BASE_DIR_PROD/public_html"
+    - PRIVATE_KEY_FILE=$(mktemp)
+    - echo "$DA_INTERN_PRIVATE_KEY" | base64 -d > "$PRIVATE_KEY_FILE"
+    - ssh -p220 -i "$PRIVATE_KEY_FILE" $DA_INTERN_USER@$DA_INTERN_SERVER "mkdir -p ~/domains/flyway.2makeitwork.nl/migrations/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME"
+    - ssh -p220 -i "$PRIVATE_KEY_FILE" $DA_INTERN_USER@$DA_INTERN_SERVER "rm -rf  ~/domains/flyway.2makeitwork.nl/migrations/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME/*"
+    - scp -P220 -i "$PRIVATE_KEY_FILE" -r flyway/sql/* $DA_INTERN_USER@$DA_INTERN_SERVER:~/domains/flyway.2makeitwork.nl/migrations/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME
+    - ssh -p220 -i "$PRIVATE_KEY_FILE" $DA_INTERN_USER@$DA_INTERN_SERVER "flyway -url=jdbc:mysql://$DA_SERVER_INTERN_IP/$DA_DATABASE_PROD -user=$DA_DATABASE_USER_PROD -password=$DA_DATABASE_PWD_PROD -locations=filesystem:/home/flywayuser/domains/flyway.2makeitwork.nl/migrations/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME migrate"
+    - rm "$PRIVATE_KEY_FILE"
+deploy_dev:
+  stage: deploy
+  needs:
+    - validate
+  dependencies:
+    - validate
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"
+      when: manual
+  before_script:
+    - |
+      if [ $CI_MERGE_REQUEST_APPROVED ]; then \
+        echo "Merge request was approved"; \
+      else \
+        echo "Merge request must be approved before you are able to run this step" && exit 1; \
+      fi
+    - 'which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )'
+    - mkdir -p ~/.ssh
+    - eval $(ssh-agent -s)
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+  script:
+    - rm -rf app/vendor
+    - ssh-add <(echo "$STAGING_PRIVATE_KEY" | base64 -d)
+    - ssh -p220 $DA_USER@$DA_SERVER "mkdir -p $BASE_DIR_DEV/_old"
+    - ssh -p220 $DA_USER@$DA_SERVER "cp -R $BASE_DIR_DEV/public_html $BASE_DIR_DEV/_old/public_html"
+    - ssh -p220 $DA_USER@$DA_SERVER "mkdir -p $BASE_DIR_DEV/_new"
+    - tar czf app.tar.gz -C app .
+    - scp -v -P220 app.tar.gz $DA_USER@$DA_SERVER:$BASE_DIR_DEV/
+    - ssh -p220 $DA_USER@$DA_SERVER "tar xzf $BASE_DIR_DEV/app.tar.gz -C $BASE_DIR_DEV/_new && rm $BASE_DIR_DEV/app.tar.gz"
+    - ssh -p220 $DA_USER@$DA_SERVER "composer install --working-dir $BASE_DIR_DEV/_new"
+    - ssh -p220 $DA_USER@$DA_SERVER "rm -rf $BASE_DIR_DEV/public_html"
+    - ssh -p220 $DA_USER@$DA_SERVER "mv $BASE_DIR_DEV/_new $BASE_DIR_DEV/public_html"
+    - ssh -p220 $DA_USER@$DA_SERVER "rm -rf $BASE_DIR_DEV/_old"
+    - ssh -p220 $DA_USER@$DA_SERVER "chmod 755 -R $BASE_DIR_DEV/public_html"
+    - PRIVATE_KEY_FILE=$(mktemp)
+    - echo "$DA_INTERN_PRIVATE_KEY" | base64 -d > "$PRIVATE_KEY_FILE"
+    - ssh -p220 -i "$PRIVATE_KEY_FILE" $DA_INTERN_USER@$DA_INTERN_SERVER "mkdir -p ~/domains/flyway.2makeitwork.nl/migrations/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME"
+    - ssh -p220 -i "$PRIVATE_KEY_FILE" $DA_INTERN_USER@$DA_INTERN_SERVER "rm -rf  ~/domains/flyway.2makeitwork.nl/migrations/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME/*"
+    - scp -P220 -i "$PRIVATE_KEY_FILE" -r flyway/sql/* $DA_INTERN_USER@$DA_INTERN_SERVER:~/domains/flyway.2makeitwork.nl/migrations/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME
+    - ssh -p220 -i "$PRIVATE_KEY_FILE" $DA_INTERN_USER@$DA_INTERN_SERVER "flyway -url=jdbc:mysql://$DA_SERVER_INTERN_IP/$DA_DATABASE_DEV -user=$DA_DATABASE_USER_DEV -password=$DA_DATABASE_PWD_DEV -locations=filesystem:/home/flywayuser/domains/flyway.2makeitwork.nl/migrations/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME migrate"
+    - rm "$PRIVATE_KEY_FILE"
